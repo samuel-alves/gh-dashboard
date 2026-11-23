@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="pt-PT">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>GitHub Index</title>
+<meta name="description" content="Repositórios, stars e following num só sítio, com listas e filtros.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Schibsted+Grotesk:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <img id="avatar" class="avatar" alt="" hidden>
+    <div>
+      <h1 id="title">GitHub Index</h1>
+      <a id="profileLink" class="sub" href="#" target="_blank" rel="noopener"></a>
+    </div>
+  </div>
+  <nav class="tabs" aria-label="Secções">
+    <a href="#repos" data-section="repos">Repositórios <span class="n" id="n-repos"></span></a>
+    <a href="#stars" data-section="stars">Stars <span class="n" id="n-stars"></span></a>
+    <a href="#following" data-section="following">Following <span class="n" id="n-following"></span></a>
+  </nav>
+  <div class="top-actions">
+    <span id="status" class="status" aria-live="polite"></span>
+    <button id="refreshBtn" type="button" class="btn">Atualizar</button>
+    <button id="tokenBtn" type="button" class="btn">Ligar token</button>
+  </div>
+</header>
+
+<div class="toolbar">
+  <label class="search">
+    <span class="sr-only">Pesquisar</span>
+    <input id="q" type="search" placeholder="Pesquisar nome, descrição, tópico, linguagem…" autocomplete="off" spellcheck="false">
+    <kbd>/</kbd>
+  </label>
+  <label class="field"><span>Linguagem</span><select id="lang"></select></label>
+  <label class="field"><span>Ordenar</span><select id="sort"></select></label>
+</div>
+
+<div class="layout">
+  <aside id="side" class="side" aria-label="Categorias"></aside>
+  <main>
+    <div class="list-head">
+      <h2 id="listTitle"></h2>
+      <p id="listInfo" class="muted"></p>
+      <a id="listLink" class="ext" target="_blank" rel="noopener" hidden>Abrir no GitHub</a>
+    </div>
+    <div id="notice" class="notice" hidden></div>
+    <div id="rows" class="rows"></div>
+  </main>
+</div>
+
+<dialog id="tokenDlg" class="dlg">
+  <form method="dialog" id="tokenForm">
+    <h2>Ligar um token do GitHub</h2>
+    <p>Sem token vês só o que é público, sem listas de stars. Com token vês repositórios privados e podes mudar listas, tirar stars e deixar de seguir.</p>
+    <p>Cria um token <em>classic</em> com os scopes <code>user</code> (listas e following) e <code>repo</code> (só se quiseres ver repositórios privados):
+      <a href="https://github.com/settings/tokens/new?scopes=repo,user&amp;description=GitHub%20Index" target="_blank" rel="noopener">criar token</a>.</p>
+    <label class="stack"><span>Token</span><input id="tokenInput" type="password" autocomplete="off" spellcheck="false" placeholder="ghp_…"></label>
+    <label class="check"><input id="remember" type="checkbox" checked> Lembrar neste browser</label>
+    <p class="muted small">O token fica só neste browser e só é enviado para api.github.com.</p>
+    <div class="dlg-actions">
+      <button type="button" id="disconnectBtn" class="btn ghost">Desligar token</button>
+      <span class="grow"></span>
+      <button value="cancel" class="btn ghost" formnovalidate>Cancelar</button>
+      <button id="connectBtn" value="ok" class="btn primary">Ligar</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="listsDlg" class="dlg">
+  <form method="dialog" id="listsForm">
+    <h2 id="listsDlgTitle">Listas</h2>
+    <div id="listsChecks" class="checks"></div>
+    <div class="dlg-actions">
+      <span class="grow"></span>
+      <button value="cancel" class="btn ghost" formnovalidate>Cancelar</button>
+      <button value="ok" class="btn primary">Guardar listas</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+<script src="app.js"></script>
+</body>
+</html>
