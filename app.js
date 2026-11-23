@@ -2,8 +2,13 @@
 
 /* ---------- Configuration (edit freely) ---------- */
 const CONFIG = {
-  activeDays: 180,      // "Ativos": pushed in the last N days
   cleanupYears: 3,      // "Para limpar": forks untouched for N years
+  // Lifecycle states (filter "Estado" + row badges), by days since the last push
+  quietDays: 180,       // up to here: "Ativo"; after: "Pouco ativo"
+  stalledDays: 365,     // after: "Parado"
+  abandonedDays: 1095,  // after (3 years): "Abandonado"
+  // Description text that marks a project as deprecated, end-of-life or moved
+  deprecated: /\b(deprecated|unmaintained|no longer (maintained|supported|developed|active)|end[- ]of[- ]life|EOL|superseded|replaced by|has been replaced|moved to|new home|not maintained|abandoned)\b/i,
   // "Ranking" sort: weights (sum 100) of each 0–1 factor. See score().
   ranking: {
     stars: { popularidade: 45, atividade: 35, forks: 10, mantido: 10 },
@@ -46,7 +51,7 @@ const collator = new Intl.Collator('pt-PT', { sensitivity: 'base' });
 const S = {
   login: null, profile: null, token: null,
   repos: [], stars: [], following: [], lists: [],
-  section: 'stars', cat: 'all', q: '', lang: '', sort: '',
+  section: 'stars', cat: 'all', q: '', lang: '', sort: '', state: '',
   loadedAt: null, busy: false,
 };
 
@@ -179,18 +184,15 @@ const listsOf = full => S.lists.filter(l => l.repos.has(full));
 
 function categories() {
   if (S.section === 'repos') {
-    const now = Date.now();
     return [
       { title: 'Todos', items: [{ key: 'all', name: 'Todos', test: () => true }] },
       { title: 'Categorias', items: CONFIG.repoGroups.map(g => ({ key: `g:${g.key}`, name: g.name, test: r => groupOf(r) === g.key })) },
-      { title: 'Estado', items: [
-        { key: 's:active', name: 'Ativos', test: r => now - new Date(r.pushedAt) < CONFIG.activeDays * DAY },
-        { key: 's:sources', name: 'Originais (não forks)', test: r => !r.fork },
-        { key: 's:private', name: 'Privados', test: r => r.private },
-        { key: 's:forks', name: 'Forks', test: r => r.fork },
-        { key: 's:archived', name: 'Arquivados', test: r => r.archived },
-        { key: 's:cleanup', name: 'Para limpar', hint: `Forks sem alterações há ${CONFIG.cleanupYears}+ anos`,
-          test: r => r.fork && !r.archived && now - new Date(r.pushedAt) > CONFIG.cleanupYears * 365 * DAY },
+      { title: 'Tipo', items: [
+        { key: 't:sources', name: 'Originais (não forks)', test: r => !r.fork },
+        { key: 't:private', name: 'Privados', test: r => r.private },
+        { key: 't:public', name: 'Públicos', test: r => !r.private },
+        { key: 't:forks', name: 'Forks', test: r => r.fork },
+        { key: 't:nodesc', name: 'Sem descrição', hint: 'Repositórios sem descrição no GitHub', test: r => !r.desc },
       ] },
     ];
   }
@@ -210,6 +212,42 @@ function categories() {
     { key: 'f:orgs', name: 'Organizações', test: u => u.org },
   ] }];
 }
+/* Lifecycle: one state per repo, shown as a badge and used by the "Estado" filter. */
+const LIFECYCLE = {
+  active:     { name: 'Ativo',        filter: 'Ativos',        hint: d => `Push nos últimos ${d.quietDays} dias` },
+  quiet:      { name: 'Pouco ativo',  filter: 'Pouco ativos',  hint: d => `Último push entre ${d.quietDays} dias e 1 ano` },
+  stalled:    { name: 'Parado',       filter: 'Parados',       hint: d => `Último push entre 1 e ${d.abandonedDays / 365} anos` },
+  abandoned:  { name: 'Abandonado',   filter: 'Abandonados',   hint: d => `Sem push há mais de ${d.abandonedDays / 365} anos e não arquivado` },
+  deprecated: { name: 'Descontinuado', filter: 'Descontinuados ou movidos', hint: () => 'A descrição diz deprecated, end-of-life, substituído ou movido' },
+  archived:   { name: 'Arquivado',    filter: 'Arquivados',    hint: () => 'Arquivado pelo dono (só leitura)' },
+};
+function lifecycle(r) {
+  if (r.archived) return 'archived';
+  if (CONFIG.deprecated.test(r.desc || '')) return 'deprecated';
+  const days = (Date.now() - new Date(r.pushedAt || 0)) / DAY;
+  if (days > CONFIG.abandonedDays) return 'abandoned';
+  if (days > CONFIG.stalledDays) return 'stalled';
+  if (days > CONFIG.quietDays) return 'quiet';
+  return 'active';
+}
+// Filter options for the "Estado" select: each lifecycle state plus review shortcuts.
+function states() {
+  if (S.section === 'following') return [];
+  const base = Object.entries(LIFECYCLE).map(([k, v]) => ({ key: k, name: v.filter, hint: v.hint(CONFIG), test: r => lifecycle(r) === k }));
+  const review = S.section === 'stars'
+    ? { key: 'review', name: 'Para rever (candidatos a tirar star)', hint: 'Arquivados, descontinuados ou abandonados',
+        test: r => ['archived', 'deprecated', 'abandoned'].includes(lifecycle(r)) }
+    : { key: 'review', name: 'Para rever (arquivar ou apagar)', hint: 'Abandonados ou descontinuados, ainda não arquivados',
+        test: r => ['deprecated', 'abandoned'].includes(lifecycle(r)) };
+  const extra = S.section === 'repos'
+    ? [{ key: 'cleanup', name: 'Para limpar (forks antigos)', hint: `Forks sem alterações há ${CONFIG.cleanupYears}+ anos`,
+        test: r => r.fork && !r.archived && Date.now() - new Date(r.pushedAt) > CONFIG.cleanupYears * 365 * DAY }]
+    : [{ key: 'oldstar', name: 'Star antiga e projeto parado', hint: 'Star há 3+ anos e sem push há 1+ ano',
+        test: r => Date.now() - new Date(r.starredAt || 0) > 1095 * DAY && ['stalled', 'abandoned', 'archived', 'deprecated'].includes(lifecycle(r)) }];
+  return [review, ...extra, ...base];
+}
+const currentState = () => states().find(s => s.key === S.state);
+
 const allCats = () => categories().flatMap(g => g.items);
 const currentCat = () => allCats().find(c => c.key === S.cat) || allCats()[0];
 
@@ -276,10 +314,12 @@ function haystack(x) {
   const lists = S.section === 'stars' ? listsOf(x.full).map(l => l.name).join(' ') : '';
   return [x.full, x.desc, x.lang, x.topics.join(' '), lists].join(' ').toLowerCase();
 }
-function baseItems() {
+// Items after search + language + state. skipState: used to count each state option.
+function baseItems(skipState) {
   const items = S[S.section];
   const t = terms();
-  return items.filter(x => (!S.lang || x.lang === S.lang) && t.every(w => haystack(x).includes(w)));
+  const st = skipState ? null : currentState();
+  return items.filter(x => (!S.lang || x.lang === S.lang) && (!st || st.test(x)) && t.every(w => haystack(x).includes(w)));
 }
 
 /* ---------- Rendering ---------- */
@@ -319,6 +359,14 @@ function renderToolbar() {
   const langs = Object.keys(counts).sort((a, b) => counts[b] - counts[a]);
   if (S.lang && !counts[S.lang]) S.lang = '';
   $('lang').innerHTML = `<option value="">Todas</option>` + langs.map(l => `<option value="${esc(l)}"${l === S.lang ? ' selected' : ''}>${esc(l)} (${counts[l]})</option>`).join('');
+
+  // State counts follow search, language and the selected category/list
+  const opts2 = states();
+  $('state').closest('.field').hidden = !opts2.length;
+  if (S.state && !opts2.some(s => s.key === S.state)) S.state = '';
+  const inCat = baseItems(true).filter(currentCat().test);
+  $('state').innerHTML = '<option value="">Todos</option>' + opts2.map(s =>
+    `<option value="${s.key}"${s.key === S.state ? ' selected' : ''} title="${esc(s.hint)}">${esc(s.name)} (${inCat.filter(s.test).length})</option>`).join('');
 }
 
 function renderSide() {
@@ -337,8 +385,9 @@ function repoRow(r, i) {
   const ranked = S.sort === 'rank';
   const sc = ranked ? score(r) : null;
   const lists = S.section === 'stars' ? listsOf(r.full) : [];
-  const badges = [r.private && 'Privado', r.fork && 'Fork', r.archived && 'Arquivado'].filter(Boolean)
-    .map(b => `<span class="badge">${b}</span>`).join('');
+  const lc = lifecycle(r);
+  const badges = [r.private && 'Privado', r.fork && 'Fork'].filter(Boolean).map(b => `<span class="badge">${b}</span>`).join('')
+    + (lc !== 'active' ? `<span class="badge state-${lc}" title="${esc(LIFECYCLE[lc].hint(CONFIG))}">${LIFECYCLE[lc].name}</span>` : '');
   const meta = [
     sc && `<span class="score" title="${esc(sc.detail)}"><span class="bar"><i style="width:${sc.value}%"></i></span>Score ${sc.value}</span>`,
     r.lang && `<span><span class="dot" style="background:${/^#[0-9a-f]{3,8}$/i.test(r.langColor) ? r.langColor : 'var(--muted)'}"></span>${hl(r.lang)}</span>`,
@@ -393,7 +442,9 @@ function renderList() {
   const items = baseItems().filter(cat.test).sort(sorter(S.sort));
   $('listTitle').textContent = cat.name;
   const noun = S.section === 'following' ? 'pessoas' : 'repositórios';
+  const st = currentState();
   $('listInfo').textContent = [`${items.length} ${noun}.`, cat.hint && `${cat.hint}.`, cat.list?.desc && `${cat.list.desc}.`,
+    st && `Estado: ${st.name} (${st.hint}).`,
     S.sort === 'rank' && `Ranking: ${rankingFormula()}.`].filter(Boolean).join(' ');
   const link = $('listLink');
   if (cat.list && S.login) { link.href = `https://github.com/stars/${S.login}/lists/${cat.list.slug}`; link.hidden = false; }
@@ -431,16 +482,20 @@ function readHash() {
   const [path, query = ''] = decodeURIComponent(location.hash.slice(1)).split('?');
   const [section, ...rest] = path.split('/');
   if (['repos', 'stars', 'following'].includes(section)) {
-    if (section !== S.section) { S.lang = ''; S.sort = ''; }
+    if (section !== S.section) { S.lang = ''; S.sort = ''; S.state = ''; }
     S.section = section;
     S.cat = rest.join('/') || 'all';
-    const sort = new URLSearchParams(query).get('sort');
-    if (sort) S.sort = sort;
+    const params = new URLSearchParams(query);
+    if (params.get('sort')) S.sort = params.get('sort');
+    S.state = params.get('state') || '';
   }
 }
 function writeHash() {
-  const sort = S.sort && S.sort !== SORTS[S.section][0][0] ? `?sort=${S.sort}` : '';
-  const h = `#${S.section}${S.cat !== 'all' ? `/${S.cat}` : ''}${sort}`;
+  const params = new URLSearchParams();
+  if (S.sort && S.sort !== SORTS[S.section][0][0]) params.set('sort', S.sort);
+  if (S.state) params.set('state', S.state);
+  const qs = params.toString();
+  const h = `#${S.section}${S.cat !== 'all' ? `/${S.cat}` : ''}${qs ? `?${qs}` : ''}`;
   if (location.hash !== h) history.replaceState(null, '', h);
 }
 
@@ -533,12 +588,13 @@ document.addEventListener('click', e => {
 });
 document.querySelectorAll('.tabs a').forEach(a => a.addEventListener('click', e => {
   e.preventDefault();
-  if (S.section !== a.dataset.section) { S.section = a.dataset.section; S.cat = 'all'; S.lang = ''; S.sort = ''; }
+  if (S.section !== a.dataset.section) { S.section = a.dataset.section; S.cat = 'all'; S.lang = ''; S.sort = ''; S.state = ''; }
   writeHash(); render();
 }));
 $('q').addEventListener('input', e => { S.q = e.target.value; renderSide(); renderList(); });
 $('lang').addEventListener('change', e => { S.lang = e.target.value; renderSide(); renderList(); });
 $('sort').addEventListener('change', e => { S.sort = e.target.value; writeHash(); renderList(); });
+$('state').addEventListener('change', e => { S.state = e.target.value; writeHash(); renderSide(); renderList(); });
 $('refreshBtn').addEventListener('click', refresh);
 $('tokenBtn').addEventListener('click', openToken);
 $('listsDlg').addEventListener('close', () => { if ($('listsDlg').returnValue === 'ok') saveLists(); });

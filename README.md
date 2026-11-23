@@ -8,11 +8,33 @@ One page to browse your GitHub: your repositories, your stars (with star lists) 
 
 | Section | Categories | Actions (with token) |
 | --- | --- | --- |
-| Repositórios | Salesforce, Mobile & Cordova, Web & Node, Outros · Ativos, Originais, Privados, Forks, Arquivados, Para limpar (forks untouched for 3+ years) | — |
+| Repositórios | Categories: Salesforce, Mobile & Cordova, Web & Node, Outros. Type: Originais, Privados, Públicos, Forks, Sem descrição | — |
 | Stars | Every star list, "Sem lista" (stars in no list) | Change a repo's lists, unstar |
 | Following | Pessoas, Organizações | Unfollow |
 
-Everywhere: instant search (`/` to focus, `Esc` to clear) over name, description, topics, language and list names; language filter; sorting; click a topic or list tag to filter by it. The URL keeps the view (`#stars/list:salesforce`), so views can be bookmarked.
+Everywhere: instant search (`/` to focus, `Esc` to clear) over name, description, topics, language and list names; language and state filters; sorting; click a topic or list tag to filter by it. The URL keeps the view (`#stars/list:security?state=review&sort=rank`), so views can be bookmarked.
+
+## Estado (lifecycle)
+
+Every repository gets one state, shown as a badge on its row (except "Ativo") and filterable with **Estado**. The filter combines with the selected category or list, language and search; counts update accordingly.
+
+| State | Rule |
+| --- | --- |
+| Ativo | Last push within 180 days |
+| Pouco ativo | Last push between 180 days and 1 year |
+| Parado | Last push between 1 and 3 years |
+| Abandonado | No push for 3+ years and not archived |
+| Descontinuado | Description says deprecated, end-of-life, replaced, moved, ... |
+| Arquivado | Archived by the owner (read-only) |
+
+Review shortcuts:
+
+| Section | Filter | Matches |
+| --- | --- | --- |
+| Stars | Para rever | Archived, deprecated or abandoned: candidates to unstar |
+| Stars | Star antiga e projeto parado | Starred 3+ years ago and no push for 1+ year |
+| Repositórios | Para rever | Abandoned or deprecated, not yet archived: archive or delete |
+| Repositórios | Para limpar | Forks untouched for 3+ years |
 
 ## Ranking
 
@@ -51,7 +73,9 @@ Hosting options and the plan to put the page behind a login (Cloudflare Pages + 
 Edit `CONFIG` at the top of `app.js`:
 
 - `repoGroups`: categories for your own repositories (first match wins)
-- `activeDays`, `cleanupYears`: thresholds for "Ativos" and "Para limpar"
+- `quietDays`, `stalledDays`, `abandonedDays`, `cleanupYears`: lifecycle thresholds
+- `deprecated`: regular expression matched against descriptions for "Descontinuado"
+- `ranking`: ranking weights
 
 ## Run locally
 
