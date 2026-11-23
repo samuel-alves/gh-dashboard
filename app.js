@@ -3,6 +3,7 @@
 /* ---------- Configuration (edit freely) ---------- */
 const CONFIG = {
   cleanupYears: 3,      // "Para limpar": forks untouched for N years
+  ownerMin: 2,          // Stars sidebar "Donos": owners with at least N starred repos
   // Lifecycle states (filter "Estado" + row badges), by days since the last push
   quietDays: 180,       // up to here: "Ativo"; after: "Pouco ativo"
   stalledDays: 365,     // after: "Parado"
@@ -103,9 +104,10 @@ async function paginate(field, selection, args = '') {
   }
 }
 
-const REPO_FIELDS = 'id nameWithOwner name owner{login} url description isPrivate isFork isArchived stargazerCount forkCount pushedAt homepageUrl primaryLanguage{name color} repositoryTopics(first:10){nodes{topic{name}}}';
+const REPO_FIELDS = 'id nameWithOwner name owner{login avatarUrl __typename} url description isPrivate isFork isArchived stargazerCount forkCount pushedAt homepageUrl primaryLanguage{name color} repositoryTopics(first:10){nodes{topic{name}}}';
 const fromGql = (n, starredAt) => ({
   id: n.id, full: n.nameWithOwner, owner: n.owner.login, name: n.name, url: n.url,
+  ownerAvatar: n.owner.avatarUrl || '', ownerOrg: n.owner.__typename === 'Organization',
   desc: n.description || '', lang: n.primaryLanguage?.name || '', langColor: n.primaryLanguage?.color || '',
   stars: n.stargazerCount, forks: n.forkCount ?? 0, pushedAt: n.pushedAt, starredAt: starredAt || null,
   private: n.isPrivate, fork: n.isFork, archived: n.isArchived,
@@ -198,12 +200,16 @@ function categories() {
   }
   if (S.section === 'stars') {
     const lists = [...S.lists].sort((a, b) => collator.compare(a.name, b.name));
+    const followed = new Set(S.following.map(u => u.login.toLowerCase()));
     return [
       { title: 'Todas', items: [
         { key: 'all', name: 'Todas as stars', test: () => true },
         ...(S.lists.length ? [{ key: 'unlisted', name: 'Sem lista', test: r => !listsOf(r.full).length }] : []),
+        { key: 'followed', name: 'De quem segues', hint: 'Repositórios de pessoas ou organizações que segues',
+          test: r => followed.has(r.owner.toLowerCase()) },
       ] },
       ...(lists.length ? [{ title: 'Listas', items: lists.map(l => ({ key: `list:${l.slug}`, name: l.name, list: l, test: r => l.repos.has(r.full) })) }] : []),
+      ...ownerGroups(followed),
     ];
   }
   return [{ title: 'Following', items: [
@@ -212,6 +218,29 @@ function categories() {
     { key: 'f:orgs', name: 'Organizações', test: u => u.org },
   ] }];
 }
+/* Owners: users or organizations with CONFIG.ownerMin+ starred repos become sidebar entries. */
+function ownerGroups(followed) {
+  const by = new Map();
+  for (const r of S.stars) {
+    const k = r.owner.toLowerCase();
+    if (!by.has(k)) by.set(k, { login: r.owner, avatar: r.ownerAvatar, org: r.ownerOrg, n: 0 });
+    by.get(k).n++;
+  }
+  const owners = [...by.values()].filter(o => o.n >= CONFIG.ownerMin)
+    .sort((a, b) => b.n - a.n || collator.compare(a.login, b.login));
+  if (!owners.length) return [];
+  return [{ title: 'Donos', items: owners.map(o => ({
+    key: `owner:${o.login}`, name: o.login, avatar: o.avatar, owner: o,
+    hint: `${o.org ? 'Organização' : 'Utilizador'}${followed.has(o.login.toLowerCase()) ? ' que segues' : ''}`,
+    test: r => r.owner.toLowerCase() === o.login.toLowerCase(),
+  })) }];
+}
+// A link like #stars/owner:<login> must work even for owners below ownerMin (e.g. from Following).
+function ownerCat(key) {
+  const login = key.slice('owner:'.length);
+  return { key, name: login, owner: { login }, test: r => r.owner.toLowerCase() === login.toLowerCase() };
+}
+
 /* Lifecycle: one state per repo, shown as a badge and used by the "Estado" filter. */
 const LIFECYCLE = {
   active:     { name: 'Ativo',        filter: 'Ativos',        hint: d => `Push nos últimos ${d.quietDays} dias` },
@@ -249,7 +278,8 @@ function states() {
 const currentState = () => states().find(s => s.key === S.state);
 
 const allCats = () => categories().flatMap(g => g.items);
-const currentCat = () => allCats().find(c => c.key === S.cat) || allCats()[0];
+const currentCat = () => allCats().find(c => c.key === S.cat)
+  || (S.section === 'stars' && S.cat.startsWith('owner:') ? ownerCat(S.cat) : allCats()[0]);
 
 /* Ranking: weighted 0–100 score from factors that are each normalized to 0–1. */
 // Stars and forks are log-scaled relative to the largest value in the whole section
@@ -377,7 +407,7 @@ function renderSide() {
     ${g.items.map(c => {
       const n = base.filter(c.test).length;
       return `<button type="button" data-cat="${esc(c.key)}" aria-pressed="${c.key === active}" class="${n ? '' : 'empty'}"${c.hint ? ` title="${esc(c.hint)}"` : ''}>
-        <span>${esc(c.name)}</span><span class="count">${n}</span></button>`;
+        ${c.avatar ? `<img class="mini${c.owner?.org ? ' org' : ''}" src="${esc(c.avatar)}&s=40" alt="" loading="lazy">` : ''}<span>${esc(c.name)}</span><span class="count">${n}</span></button>`;
     }).join('')}`).join('');
 }
 
@@ -423,13 +453,17 @@ function personRow(u) {
     u.repos !== null && `<span>${u.repos} repositórios</span>`,
     u.followers !== null && `<span>${fmtNum(u.followers)} seguidores</span>`,
   ].filter(Boolean).join('');
+  const starred = S.stars.filter(r => r.owner.toLowerCase() === u.login.toLowerCase()).length;
+  const starLink = starred
+    ? `<a class="tag" href="#stars/owner:${encodeURIComponent(u.login)}" title="Ver as tuas stars deste dono">${starred} ${starred === 1 ? 'star tua' : 'stars tuas'}</a>`
+    : '';
   return `<article class="row person">
     <img src="${esc(u.avatar)}&s=88" alt="" loading="lazy">
     <div class="row-main">
       <a class="name" href="${esc(u.url)}" target="_blank" rel="noopener">${hl(u.login)}</a>${u.org ? '<span class="badge">Organização</span>' : ''}
       ${u.name ? `<span class="muted"> ${hl(u.name)}</span>` : ''}
       ${u.bio ? `<p class="desc">${hl(u.bio)}</p>` : ''}
-      <div class="meta">${meta}
+      <div class="meta">${meta}${starLink}
         <a href="${esc(u.url)}?tab=repositories">Repositórios</a>
         <a href="${esc(u.url)}?tab=stars">Stars</a></div>
     </div>
@@ -448,6 +482,7 @@ function renderList() {
     S.sort === 'rank' && `Ranking: ${rankingFormula()}.`].filter(Boolean).join(' ');
   const link = $('listLink');
   if (cat.list && S.login) { link.href = `https://github.com/stars/${S.login}/lists/${cat.list.slug}`; link.hidden = false; }
+  else if (cat.owner) { link.href = `https://github.com/${encodeURIComponent(cat.owner.login)}`; link.hidden = false; }
   else if (S.login) { link.href = `https://github.com/${S.login}?tab=${S.section === 'repos' ? 'repositories' : S.section}`; link.hidden = false; }
   else link.hidden = true;
 
