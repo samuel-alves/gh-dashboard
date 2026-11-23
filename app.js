@@ -4,6 +4,11 @@
 const CONFIG = {
   activeDays: 180,      // "Ativos": pushed in the last N days
   cleanupYears: 3,      // "Para limpar": forks untouched for N years
+  // "Ranking" sort: weights (sum 100) of each 0–1 factor. See score().
+  ranking: {
+    stars: { popularidade: 45, atividade: 35, forks: 10, mantido: 10 },
+    repos: { atividade: 50, popularidade: 20, original: 20, mantido: 10 },
+  },
   // Categories for your own repositories. First match wins.
   repoGroups: [
     { key: 'salesforce', name: 'Salesforce',
@@ -93,11 +98,11 @@ async function paginate(field, selection, args = '') {
   }
 }
 
-const REPO_FIELDS = 'id nameWithOwner name owner{login} url description isPrivate isFork isArchived stargazerCount pushedAt homepageUrl primaryLanguage{name color} repositoryTopics(first:10){nodes{topic{name}}}';
+const REPO_FIELDS = 'id nameWithOwner name owner{login} url description isPrivate isFork isArchived stargazerCount forkCount pushedAt homepageUrl primaryLanguage{name color} repositoryTopics(first:10){nodes{topic{name}}}';
 const fromGql = (n, starredAt) => ({
   id: n.id, full: n.nameWithOwner, owner: n.owner.login, name: n.name, url: n.url,
   desc: n.description || '', lang: n.primaryLanguage?.name || '', langColor: n.primaryLanguage?.color || '',
-  stars: n.stargazerCount, pushedAt: n.pushedAt, starredAt: starredAt || null,
+  stars: n.stargazerCount, forks: n.forkCount ?? 0, pushedAt: n.pushedAt, starredAt: starredAt || null,
   private: n.isPrivate, fork: n.isFork, archived: n.isArchived,
   topics: (n.repositoryTopics?.nodes || []).map(t => t.topic.name), homepage: n.homepageUrl || '',
 });
@@ -208,9 +213,50 @@ function categories() {
 const allCats = () => categories().flatMap(g => g.items);
 const currentCat = () => allCats().find(c => c.key === S.cat) || allCats()[0];
 
+/* Ranking: weighted 0–100 score from factors that are each normalized to 0–1. */
+// Stars and forks are log-scaled relative to the largest value in the whole section
+// (not the filtered view), so scores stay stable across filters and the top does not saturate.
+const scoreCache = { repos: new WeakMap(), stars: new WeakMap() };
+const maxCache = new WeakMap();
+function sectionMax(section) {
+  const arr = S[section];
+  if (!maxCache.has(arr)) {
+    maxCache.set(arr, {
+      stars: Math.max(0, ...arr.map(r => r.stars || 0)),
+      forks: Math.max(0, ...arr.map(r => r.forks || 0)),
+    });
+  }
+  return maxCache.get(arr);
+}
+const logShare = (v, max) => (max > 0 ? Math.log1p(v || 0) / Math.log1p(max) : 0);
+function score(r, section = S.section) {
+  const cache = scoreCache[section];
+  if (cache.has(r)) return cache.get(r);
+  const max = sectionMax(section);
+  const days = (Date.now() - new Date(r.pushedAt || 0)) / DAY;
+  const factors = {
+    popularidade: logShare(r.stars, max.stars),
+    atividade: Math.exp(-Math.max(0, days) / 365),   // pushed today = 1, a year ago ≈ 0.37
+    forks: logShare(r.forks, max.forks),
+    mantido: r.archived ? 0 : 1,
+    original: r.fork ? 0 : 1,
+  };
+  const weights = CONFIG.ranking[section];
+  let value = 0;
+  const detail = [];
+  for (const [k, w] of Object.entries(weights)) {
+    value += w * factors[k];
+    detail.push(`${k}: ${Math.round(factors[k] * 100)}% × ${w}`);
+  }
+  const out = { value: Math.round(value), detail: `Score ${Math.round(value)}/100\n${detail.join('\n')}` };
+  cache.set(r, out);
+  return out;
+}
+const rankingFormula = () => Object.entries(CONFIG.ranking[S.section] || {}).map(([k, w]) => `${k} ${w}%`).join(', ');
+
 const SORTS = {
-  repos: [['pushed', 'Atualizados recentemente'], ['name', 'Nome'], ['stars', 'Stars']],
-  stars: [['starred', 'Star mais recente'], ['pushed', 'Atualizados recentemente'], ['stars', 'Mais populares'], ['name', 'Nome']],
+  repos: [['pushed', 'Atualizados recentemente'], ['rank', 'Ranking'], ['name', 'Nome'], ['stars', 'Stars']],
+  stars: [['starred', 'Star mais recente'], ['rank', 'Ranking'], ['pushed', 'Atualizados recentemente'], ['stars', 'Mais populares'], ['name', 'Nome']],
   following: [['login', 'Nome'], ['followers', 'Mais seguidos']],
 };
 function sorter(key) {
@@ -218,6 +264,7 @@ function sorter(key) {
     pushed: (a, b) => (b.pushedAt || '').localeCompare(a.pushedAt || ''),
     starred: (a, b) => (b.starredAt || '').localeCompare(a.starredAt || ''),
     stars: (a, b) => b.stars - a.stars,
+    rank: (a, b) => score(b).value - score(a).value || b.stars - a.stars,
     name: (a, b) => collator.compare(a.name, b.name),
     login: (a, b) => collator.compare(a.login, b.login),
     followers: (a, b) => (b.followers || 0) - (a.followers || 0),
@@ -286,11 +333,14 @@ function renderSide() {
     }).join('')}`).join('');
 }
 
-function repoRow(r) {
+function repoRow(r, i) {
+  const ranked = S.sort === 'rank';
+  const sc = ranked ? score(r) : null;
   const lists = S.section === 'stars' ? listsOf(r.full) : [];
   const badges = [r.private && 'Privado', r.fork && 'Fork', r.archived && 'Arquivado'].filter(Boolean)
     .map(b => `<span class="badge">${b}</span>`).join('');
   const meta = [
+    sc && `<span class="score" title="${esc(sc.detail)}"><span class="bar"><i style="width:${sc.value}%"></i></span>Score ${sc.value}</span>`,
     r.lang && `<span><span class="dot" style="background:${/^#[0-9a-f]{3,8}$/i.test(r.langColor) ? r.langColor : 'var(--muted)'}"></span>${hl(r.lang)}</span>`,
     `<span title="Stars">★ ${fmtNum(r.stars)}</span>`,
     r.pushedAt && `<span title="${esc(new Date(r.pushedAt).toLocaleString('pt-PT'))}">Atualizado ${ago(r.pushedAt)}</span>`,
@@ -305,7 +355,8 @@ function repoRow(r) {
   const actions = S.token && S.section === 'stars' ? `
       ${S.lists.length ? `<button type="button" class="btn" data-act="lists" data-id="${esc(r.full)}">Listas</button>` : ''}
       <button type="button" class="btn danger" data-act="unstar" data-id="${esc(r.full)}">Tirar star</button>` : '';
-  return `<article class="row">
+  return `<article class="row${ranked ? ' ranked' : ''}">
+    ${ranked ? `<span class="rank" aria-label="Posição ${i + 1}">${i + 1}</span>` : ''}
     <div class="row-main">
       <a class="name" href="${esc(r.url)}" target="_blank" rel="noopener"><span class="owner">${hl(r.owner)}/</span>${hl(r.name)}</a>${badges}
       ${r.desc ? `<p class="desc">${hl(r.desc)}</p>` : ''}
@@ -342,7 +393,8 @@ function renderList() {
   const items = baseItems().filter(cat.test).sort(sorter(S.sort));
   $('listTitle').textContent = cat.name;
   const noun = S.section === 'following' ? 'pessoas' : 'repositórios';
-  $('listInfo').textContent = [`${items.length} ${noun}.`, cat.hint && `${cat.hint}.`, cat.list?.desc && `${cat.list.desc}.`].filter(Boolean).join(' ');
+  $('listInfo').textContent = [`${items.length} ${noun}.`, cat.hint && `${cat.hint}.`, cat.list?.desc && `${cat.list.desc}.`,
+    S.sort === 'rank' && `Ranking: ${rankingFormula()}.`].filter(Boolean).join(' ');
   const link = $('listLink');
   if (cat.list && S.login) { link.href = `https://github.com/stars/${S.login}/lists/${cat.list.slug}`; link.hidden = false; }
   else if (S.login) { link.href = `https://github.com/${S.login}?tab=${S.section === 'repos' ? 'repositories' : S.section}`; link.hidden = false; }
@@ -374,16 +426,21 @@ function render() {
 }
 
 /* ---------- Routing: #section/category ---------- */
+// Format: #<section>[/<category>][?sort=<key>], e.g. #stars/list:security?sort=rank
 function readHash() {
-  const [section, ...rest] = decodeURIComponent(location.hash.slice(1)).split('/');
+  const [path, query = ''] = decodeURIComponent(location.hash.slice(1)).split('?');
+  const [section, ...rest] = path.split('/');
   if (['repos', 'stars', 'following'].includes(section)) {
     if (section !== S.section) { S.lang = ''; S.sort = ''; }
     S.section = section;
     S.cat = rest.join('/') || 'all';
+    const sort = new URLSearchParams(query).get('sort');
+    if (sort) S.sort = sort;
   }
 }
 function writeHash() {
-  const h = `#${S.section}${S.cat !== 'all' ? `/${S.cat}` : ''}`;
+  const sort = S.sort && S.sort !== SORTS[S.section][0][0] ? `?sort=${S.sort}` : '';
+  const h = `#${S.section}${S.cat !== 'all' ? `/${S.cat}` : ''}${sort}`;
   if (location.hash !== h) history.replaceState(null, '', h);
 }
 
@@ -481,7 +538,7 @@ document.querySelectorAll('.tabs a').forEach(a => a.addEventListener('click', e 
 }));
 $('q').addEventListener('input', e => { S.q = e.target.value; renderSide(); renderList(); });
 $('lang').addEventListener('change', e => { S.lang = e.target.value; renderSide(); renderList(); });
-$('sort').addEventListener('change', e => { S.sort = e.target.value; renderList(); });
+$('sort').addEventListener('change', e => { S.sort = e.target.value; writeHash(); renderList(); });
 $('refreshBtn').addEventListener('click', refresh);
 $('tokenBtn').addEventListener('click', openToken);
 $('listsDlg').addEventListener('close', () => { if ($('listsDlg').returnValue === 'ok') saveLists(); });

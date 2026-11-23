@@ -140,6 +140,15 @@ body.locked .tabs, body.locked .top-actions, body.locked .toolbar, body.locked .
   padding: 14px 4px; border-bottom: 1px solid var(--line);
 }
 .row-main { min-width: 0; }
+.row.ranked { grid-template-columns: 2.75rem minmax(0, 1fr) auto; }
+.rank {
+  font: 500 17px var(--mono); color: var(--muted); text-align: right;
+  font-variant-numeric: tabular-nums; padding-top: 1px;
+}
+.row.ranked:nth-child(-n+3) .rank { color: var(--accent); }
+.score { display: inline-flex; align-items: center; gap: 6px; color: var(--ink); cursor: help; }
+.bar { display: inline-block; width: 48px; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--accent); }
 .name { font: 500 15px var(--mono); text-decoration: none; word-break: break-word; }
 .name .owner { color: var(--muted); font-weight: 400; }
 .name:hover { color: var(--accent); }
@@ -207,6 +216,8 @@ mark { background: var(--mark); color: inherit; border-radius: 2px; }
   .field { flex: 1 1 140px; }
   .field select { min-width: 0; width: 100%; }
   .row { grid-template-columns: minmax(0, 1fr); }
+  .row.ranked { grid-template-columns: 2rem minmax(0, 1fr); }
+  .row.ranked .row-actions { grid-column: 2; }
   .person { grid-template-columns: 44px minmax(0, 1fr); }
   .person .row-actions { grid-column: 2; }
 }

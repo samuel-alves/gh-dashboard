@@ -14,6 +14,25 @@ One page to browse your GitHub: your repositories, your stars (with star lists) 
 
 Everywhere: instant search (`/` to focus, `Esc` to clear) over name, description, topics, language and list names; language filter; sorting; click a topic or list tag to filter by it. The URL keeps the view (`#stars/list:salesforce`), so views can be bookmarked.
 
+## Ranking
+
+Sort **Ranking** (Repositórios and Stars) orders the current view by a 0–100 score and shows each item's position, score and a bar; hover the score for the breakdown. Each factor is 0–1, then weighted:
+
+| Factor | How it is measured |
+| --- | --- |
+| popularidade | Stars, log scale, relative to the most-starred repo in the section |
+| atividade | Days since last push: today = 1, one year ≈ 0.37 |
+| forks | Forks, log scale, relative to the most-forked repo in the section |
+| mantido | 0 if archived, else 1 |
+| original | 0 if fork, else 1 (own repos only) |
+
+| Section | Weights |
+| --- | --- |
+| Stars | popularidade 45, atividade 35, forks 10, mantido 10 |
+| Repositórios | atividade 50, popularidade 20, original 20, mantido 10 |
+
+Change weights in `CONFIG.ranking`. Positions are within the current view, so a star list sorted by Ranking shows that list's top. Shareable: `#stars/list:security?sort=rank`.
+
 ## Token
 
 The page contains no data. Without a token it only shows a "connect a token" screen; with a token it shows the data of the account that owns the token, so a visitor with their own token sees their own account, never yours. Use a **classic** token:
