@@ -31,6 +31,12 @@
   </div>
 </header>
 
+<section id="gate" class="gate" hidden>
+  <h2>Liga um token para continuar</h2>
+  <p>Esta página não guarda dados. Mostra os repositórios, stars e following da conta dona do token que ligares, e esse token fica só neste browser.</p>
+  <button id="gateBtn" type="button" class="btn primary">Ligar token</button>
+</section>
+
 <div class="toolbar">
   <label class="search">
     <span class="sr-only">Pesquisar</span>
@@ -49,7 +55,6 @@
       <p id="listInfo" class="muted"></p>
       <a id="listLink" class="ext" target="_blank" rel="noopener" hidden>Abrir no GitHub</a>
     </div>
-    <div id="notice" class="notice" hidden></div>
     <div id="rows" class="rows"></div>
   </main>
 </div>
@@ -57,7 +62,7 @@
 <dialog id="tokenDlg" class="dlg">
   <form method="dialog" id="tokenForm">
     <h2>Ligar um token do GitHub</h2>
-    <p>Sem token vês só o que é público, sem listas de stars. Com token vês repositórios privados e podes mudar listas, tirar stars e deixar de seguir.</p>
+    <p>A página mostra os dados da conta dona do token: repositórios (incluindo privados), stars com listas e following. Também permite mudar listas, tirar stars e deixar de seguir.</p>
     <p>Cria um token <em>classic</em> com os scopes <code>user</code> (listas e following) e <code>repo</code> (só se quiseres ver repositórios privados):
       <a href="https://github.com/settings/tokens/new?scopes=repo,user&amp;description=GitHub%20Index" target="_blank" rel="noopener">criar token</a>.</p>
     <label class="stack"><span>Token</span><input id="tokenInput" type="password" autocomplete="off" spellcheck="false" placeholder="ghp_…"></label>

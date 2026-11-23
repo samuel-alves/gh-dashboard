@@ -16,7 +16,7 @@ Everywhere: instant search (`/` to focus, `Esc` to clear) over name, description
 
 ## Token
 
-Without a token the page shows public data for the user in the URL (`?user=<login>`, default: the `*.github.io` owner). Star lists, private repositories and the actions need a **classic** token:
+The page contains no data. Without a token it only shows a "connect a token" screen; with a token it shows the data of the account that owns the token, so a visitor with their own token sees their own account, never yours. Use a **classic** token:
 
 - `user`: star lists and unfollow (also needed to change lists)
 - `repo`: only if you want private repositories

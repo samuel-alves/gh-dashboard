@@ -2,7 +2,6 @@
 
 /* ---------- Configuration (edit freely) ---------- */
 const CONFIG = {
-  defaultUser: 'samuel-alves',
   activeDays: 180,      // "Ativos": pushed in the last N days
   cleanupYears: 3,      // "Para limpar": forks untouched for N years
   // Categories for your own repositories. First match wins.
@@ -46,12 +45,6 @@ const S = {
   loadedAt: null, busy: false,
 };
 
-function guessUser() {
-  const p = new URLSearchParams(location.search).get('user');
-  if (p) return p;
-  const m = location.hostname.match(/^([^.]+)\.github\.io$/);
-  return m ? m[1] : CONFIG.defaultUser;
-}
 
 /* ---------- GitHub API ---------- */
 function apiError(status, body) {
@@ -108,18 +101,6 @@ const fromGql = (n, starredAt) => ({
   private: n.isPrivate, fork: n.isFork, archived: n.isArchived,
   topics: (n.repositoryTopics?.nodes || []).map(t => t.topic.name), homepage: n.homepageUrl || '',
 });
-// REST has no language colors; these match GitHub's linguist colors for common languages.
-const LANG_COLORS = {
-  JavaScript: '#f1e05a', TypeScript: '#3178c6', Python: '#3572A5', Apex: '#1797c0', Java: '#b07219', Swift: '#F05138',
-  Go: '#00ADD8', Rust: '#dea584', C: '#555555', 'C++': '#f34b7d', Shell: '#89e051', HTML: '#e34c26', CSS: '#663399',
-  PHP: '#4F5D95', Ruby: '#701516', Kotlin: '#A97BFF', 'Objective-C': '#438eff', PowerShell: '#012456', SCSS: '#c6538c',
-};
-const fromRest = (r, starredAt) => ({
-  id: r.node_id, full: r.full_name, owner: r.owner.login, name: r.name, url: r.html_url,
-  desc: r.description || '', lang: r.language || '', langColor: LANG_COLORS[r.language] || '',
-  stars: r.stargazers_count, pushedAt: r.pushed_at, starredAt: starredAt || null,
-  private: r.private, fork: r.fork, archived: r.archived, topics: r.topics || [], homepage: r.homepage || '',
-});
 
 // GraphQL `viewer.following` returns users only; REST also returns followed organizations.
 async function loadFollowing(path) {
@@ -146,7 +127,7 @@ async function loadFollowing(path) {
 }
 
 async function loadAll() {
-  if (S.token) {
+  if (S.token) { // the page shows nothing without a token (see renderGate)
     const v = (await gql('{viewer{login name avatarUrl url}}')).viewer;
     S.login = v.login;
     S.profile = { name: v.name, avatar: v.avatarUrl, url: v.url };
@@ -163,27 +144,13 @@ async function loadAll() {
       id: l.id, name: l.name, slug: l.slug, desc: l.description || '',
       repos: new Set(l.items.nodes.filter(Boolean).map(i => i.nameWithOwner)),
     }));
-  } else {
-    const login = guessUser();
-    const [u, repos, stars, following] = await Promise.all([
-      rest(`/users/${encodeURIComponent(login)}`),
-      restAll(`/users/${encodeURIComponent(login)}/repos?type=owner&sort=pushed`),
-      restAll(`/users/${encodeURIComponent(login)}/starred`, 'application/vnd.github.star+json'),
-      loadFollowing(`/users/${encodeURIComponent(login)}/following`),
-    ]);
-    S.login = u.login;
-    S.profile = { name: u.name, avatar: u.avatar_url, url: u.html_url };
-    S.repos = repos.map(r => fromRest(r));
-    S.stars = stars.map(s => fromRest(s.repo, s.starred_at));
-    S.following = following;
-    S.lists = [];
   }
   S.loadedAt = Date.now();
   saveCache();
 }
 
 /* ---------- Cache (this browser only) ---------- */
-const cacheKey = () => `ghindex:cache:${S.token ? 'auth' : guessUser()}`;
+const cacheKey = () => 'ghindex:cache';
 function saveCache() {
   const data = { ...S, token: undefined, lists: S.lists.map(l => ({ ...l, repos: [...l.repos] })) };
   store.set(cacheKey(), JSON.stringify(data));
@@ -381,12 +348,6 @@ function renderList() {
   else if (S.login) { link.href = `https://github.com/${S.login}?tab=${S.section === 'repos' ? 'repositories' : S.section}`; link.hidden = false; }
   else link.hidden = true;
 
-  const notice = $('notice');
-  if (!S.token && S.section === 'stars') {
-    notice.innerHTML = 'As listas de stars só aparecem com um token ligado (a API pública do GitHub não as mostra). <button type="button" class="btn" data-act="token">Ligar token</button>';
-    notice.hidden = false;
-  } else notice.hidden = true;
-
   const rows = $('rows');
   if (!items.length) {
     rows.innerHTML = `<p class="empty-state">${S.loadedAt
@@ -397,7 +358,16 @@ function renderList() {
   rows.innerHTML = items.map(S.section === 'following' ? personRow : repoRow).join('');
 }
 
+// Without a token nothing is fetched or shown: only the "connect a token" screen.
+function renderGate() {
+  const locked = !S.token;
+  document.body.classList.toggle('locked', locked);
+  $('gate').hidden = !locked;
+  return locked;
+}
+
 function render() {
+  if (renderGate()) return;
   renderHeader(); renderToolbar(); renderSide(); renderList();
   $('status').textContent = S.busy ? 'A atualizar…' : (S.loadedAt ? `Atualizado ${ago(new Date(S.loadedAt).toISOString())}` : '');
   $('refreshBtn').disabled = S.busy;
@@ -433,7 +403,7 @@ function explain(err) {
 }
 
 async function refresh() {
-  if (S.busy) return;
+  if (S.busy || !S.token) return;
   S.busy = true; render();
   try { await loadAll(); toast('Dados atualizados'); }
   catch (e) { toast(`Não foi possível carregar: ${explain(e)}`, true); }
@@ -521,16 +491,19 @@ $('tokenDlg').addEventListener('close', () => {
   if (!v) return;
   store.del('ghindex:token');
   store.set('ghindex:token', v, !$('remember').checked);
-  S.token = v; S.lists = [];
-  loadCache(); render(); refresh();
+  store.del('ghindex:cache'); // a different token may belong to a different account
+  S.token = v;
+  Object.assign(S, { login: null, profile: null, repos: [], stars: [], following: [], lists: [], loadedAt: null });
+  render(); refresh();
 });
 $('disconnectBtn').addEventListener('click', () => {
   store.del('ghindex:token');
-  store.del('ghindex:cache:auth');
+  store.del('ghindex:cache');
   S.token = null; $('tokenDlg').close('cancel');
-  Object.assign(S, { repos: [], stars: [], following: [], lists: [], loadedAt: null });
-  loadCache(); render(); refresh();
+  Object.assign(S, { login: null, profile: null, repos: [], stars: [], following: [], lists: [], loadedAt: null });
+  render();
 });
+$('gateBtn').addEventListener('click', openToken);
 window.addEventListener('hashchange', () => { readHash(); render(); });
 document.addEventListener('keydown', e => {
   const typing = /INPUT|SELECT|TEXTAREA/.test(document.activeElement?.tagName);
@@ -541,6 +514,6 @@ document.addEventListener('keydown', e => {
 /* ---------- Start ---------- */
 loadToken();
 readHash();
-const hadCache = loadCache();
+const hadCache = S.token && loadCache();
 render();
-if (!hadCache || Date.now() - (S.loadedAt || 0) > 10 * 60 * 1000) refresh();
+if (S.token && (!hadCache || Date.now() - (S.loadedAt || 0) > 10 * 60 * 1000)) refresh();
