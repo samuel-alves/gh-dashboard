@@ -4,6 +4,7 @@
 const CONFIG = {
   cleanupYears: 3,      // "Para limpar": forks untouched for N years
   ownerMin: 2,          // Stars sidebar "Donos": owners with at least N starred repos
+  suggestMin: 3,        // Following "Sugestões para seguir": unfollowed owners with N+ starred repos
   // Lifecycle states (filter "Estado" + row badges), by days since the last push
   quietDays: 180,       // up to here: "Ativo"; after: "Pouco ativo"
   stalledDays: 365,     // after: "Parado"
@@ -51,7 +52,7 @@ const collator = new Intl.Collator('pt-PT', { sensitivity: 'base' });
 /* ---------- State ---------- */
 const S = {
   login: null, profile: null, token: null,
-  repos: [], stars: [], following: [], lists: [],
+  repos: [], stars: [], following: [], lists: [], suggestions: [],
   section: 'stars', cat: 'all', q: '', lang: '', sort: '', state: '',
   loadedAt: null, busy: false,
 };
@@ -120,9 +121,15 @@ async function loadFollowing(path) {
     login: f.login, org: f.type === 'Organization', name: '', avatar: f.avatar_url, url: f.html_url,
     bio: '', company: '', location: '', repos: null, followers: null,
   }));
-  if (!S.token) return base;
-  for (let i = 0; i < base.length; i += 50) {
-    const chunk = base.slice(i, i + 50);
+  await enrichOwners(base);
+  return base;
+}
+
+// Fills name, bio, location and counts for users/organizations, 50 per GraphQL request.
+async function enrichOwners(list) {
+  if (!S.token) return;
+  for (let i = 0; i < list.length; i += 50) {
+    const chunk = list.slice(i, i + 50);
     const q = chunk.map((u, j) => `u${j}:repositoryOwner(login:${JSON.stringify(u.login)}){repositories{totalCount}
       ... on User{name bio company location followers{totalCount}} ... on Organization{name description location}}`).join('\n');
     const d = await gql(`{${q}}`);
@@ -135,7 +142,35 @@ async function loadFollowing(path) {
       });
     });
   }
-  return base;
+}
+
+// How many of your stars belong to each owner (lowercase login → count).
+const starCountCache = new WeakMap();
+function starsByOwner() {
+  if (!starCountCache.has(S.stars)) {
+    const m = new Map();
+    for (const r of S.stars) m.set(r.owner.toLowerCase(), (m.get(r.owner.toLowerCase()) || 0) + 1);
+    starCountCache.set(S.stars, m);
+  }
+  return starCountCache.get(S.stars);
+}
+const myStarsOf = login => starsByOwner().get(login.toLowerCase()) || 0;
+
+// Owners you star CONFIG.suggestMin+ times but don't follow (and aren't you).
+async function loadSuggestions() {
+  const skip = new Set([S.login.toLowerCase(), ...S.following.map(u => u.login.toLowerCase())]);
+  const seen = new Map();
+  for (const r of S.stars) {
+    const k = r.owner.toLowerCase();
+    if (skip.has(k) || seen.has(k) || myStarsOf(k) < CONFIG.suggestMin) continue;
+    seen.set(k, {
+      login: r.owner, org: !!r.ownerOrg, avatar: r.ownerAvatar, url: `https://github.com/${r.owner}`,
+      name: '', bio: '', company: '', location: '', repos: null, followers: null, suggested: true,
+    });
+  }
+  const list = [...seen.values()];
+  await enrichOwners(list);
+  return list;
 }
 
 async function loadAll() {
@@ -156,6 +191,7 @@ async function loadAll() {
       id: l.id, name: l.name, slug: l.slug, desc: l.description || '',
       repos: new Set(l.items.nodes.filter(Boolean).map(i => i.nameWithOwner)),
     }));
+    S.suggestions = await loadSuggestions();
   }
   S.loadedAt = Date.now();
   saveCache();
@@ -174,6 +210,7 @@ function loadCache() {
     const d = JSON.parse(raw);
     Object.assign(S, {
       login: d.login, profile: d.profile, repos: d.repos, stars: d.stars, following: d.following, loadedAt: d.loadedAt,
+      suggestions: d.suggestions || [],
       lists: d.lists.map(l => ({ ...l, repos: new Set(l.repos) })),
     });
     return true;
@@ -216,6 +253,10 @@ function categories() {
     { key: 'all', name: 'Todos', test: () => true },
     { key: 'f:users', name: 'Pessoas', test: u => !u.org },
     { key: 'f:orgs', name: 'Organizações', test: u => u.org },
+  ] }, { title: 'Descobrir', items: [
+    // Virtual category: its rows come from S.suggestions, not from S.following
+    { key: 'suggest', name: 'Sugestões para seguir', source: () => S.suggestions, test: () => true,
+      hint: `Donos de ${CONFIG.suggestMin}+ repositórios com star tua que ainda não segues` },
   ] }];
 }
 /* Owners: users or organizations with CONFIG.ownerMin+ starred repos become sidebar entries. */
@@ -325,7 +366,7 @@ const rankingFormula = () => Object.entries(CONFIG.ranking[S.section] || {}).map
 const SORTS = {
   repos: [['pushed', 'Atualizados recentemente'], ['rank', 'Ranking'], ['name', 'Nome'], ['stars', 'Stars']],
   stars: [['starred', 'Star mais recente'], ['rank', 'Ranking'], ['pushed', 'Atualizados recentemente'], ['stars', 'Mais populares'], ['name', 'Nome']],
-  following: [['login', 'Nome'], ['followers', 'Mais seguidos']],
+  following: [['login', 'Nome'], ['mystars', 'Mais stars tuas'], ['followers', 'Mais seguidos']],
 };
 function sorter(key) {
   return {
@@ -336,6 +377,7 @@ function sorter(key) {
     name: (a, b) => collator.compare(a.name, b.name),
     login: (a, b) => collator.compare(a.login, b.login),
     followers: (a, b) => (b.followers || 0) - (a.followers || 0),
+    mystars: (a, b) => myStarsOf(b.login) - myStarsOf(a.login) || collator.compare(a.login, b.login),
   }[key];
 }
 const terms = () => S.q.toLowerCase().split(/\s+/).filter(Boolean);
@@ -345,8 +387,7 @@ function haystack(x) {
   return [x.full, x.desc, x.lang, x.topics.join(' '), lists].join(' ').toLowerCase();
 }
 // Items after search + language + state. skipState: used to count each state option.
-function baseItems(skipState) {
-  const items = S[S.section];
+function baseItems(skipState, items = S[S.section]) {
   const t = terms();
   const st = skipState ? null : currentState();
   return items.filter(x => (!S.lang || x.lang === S.lang) && (!st || st.test(x)) && t.every(w => haystack(x).includes(w)));
@@ -405,7 +446,7 @@ function renderSide() {
   $('side').innerHTML = categories().map(g => `
     <h3>${esc(g.title)}</h3>
     ${g.items.map(c => {
-      const n = base.filter(c.test).length;
+      const n = c.source ? baseItems(false, c.source()).length : base.filter(c.test).length;
       return `<button type="button" data-cat="${esc(c.key)}" aria-pressed="${c.key === active}" class="${n ? '' : 'empty'}"${c.hint ? ` title="${esc(c.hint)}"` : ''}>
         ${c.avatar ? `<img class="mini${c.owner?.org ? ' org' : ''}" src="${esc(c.avatar)}&s=40" alt="" loading="lazy">` : ''}<span>${esc(c.name)}</span><span class="count">${n}</span></button>`;
     }).join('')}`).join('');
@@ -467,15 +508,17 @@ function personRow(u) {
         <a href="${esc(u.url)}?tab=repositories">Repositórios</a>
         <a href="${esc(u.url)}?tab=stars">Stars</a></div>
     </div>
-    <div class="row-actions">${S.token ? `<button type="button" class="btn danger" data-act="unfollow" data-id="${esc(u.login)}">Deixar de seguir</button>` : ''}</div>
+    <div class="row-actions">${!S.token ? '' : u.suggested
+      ? `<button type="button" class="btn primary" data-act="follow" data-id="${esc(u.login)}">Seguir</button>`
+      : `<button type="button" class="btn danger" data-act="unfollow" data-id="${esc(u.login)}">Deixar de seguir</button>`}</div>
   </article>`;
 }
 
 function renderList() {
   const cat = currentCat(); // falls back to "all" until data (e.g. star lists) has loaded; S.cat is kept
-  const items = baseItems().filter(cat.test).sort(sorter(S.sort));
+  const items = (cat.source ? baseItems(false, cat.source()) : baseItems().filter(cat.test)).sort(sorter(S.sort));
   $('listTitle').textContent = cat.name;
-  const noun = S.section === 'following' ? 'pessoas' : 'repositórios';
+  const noun = S.section === 'following' ? 'contas' : 'repositórios';
   const st = currentState();
   $('listInfo').textContent = [`${items.length} ${noun}.`, cat.hint && `${cat.hint}.`, cat.list?.desc && `${cat.list.desc}.`,
     st && `Estado: ${st.name} (${st.hint}).`,
@@ -575,8 +618,20 @@ async function unstar(full) {
 async function unfollow(login) {
   try {
     await rest(`/user/following/${encodeURIComponent(login)}`, { method: 'DELETE' });
+    const gone = S.following.find(u => u.login === login);
     S.following = S.following.filter(u => u.login !== login);
+    // Back to suggestions if it still qualifies
+    if (gone && myStarsOf(login) >= CONFIG.suggestMin) S.suggestions = [...S.suggestions, { ...gone, suggested: true }];
     saveCache(); render(); toast(`Deixaste de seguir ${login}`);
+  } catch (e) { toast(explain(e), true); }
+}
+async function follow(login) {
+  try {
+    await rest(`/user/following/${encodeURIComponent(login)}`, { method: 'PUT' });
+    const s = S.suggestions.find(u => u.login === login);
+    S.suggestions = S.suggestions.filter(u => u.login !== login);
+    if (s) S.following = [...S.following, { ...s, suggested: false }];
+    saveCache(); render(); toast(`Passaste a seguir ${login}`);
   } catch (e) { toast(explain(e), true); }
 }
 
@@ -618,6 +673,7 @@ document.addEventListener('click', e => {
   const id = t.dataset.id;
   if (t.dataset.act === 'unstar') arm(t, 'Confirmar', () => unstar(id));
   if (t.dataset.act === 'unfollow') arm(t, 'Confirmar', () => unfollow(id));
+  if (t.dataset.act === 'follow') { t.disabled = true; follow(id).finally(() => { t.disabled = false; }); }
   if (t.dataset.act === 'lists') openLists(id);
   if (t.dataset.act === 'token') openToken();
 });
@@ -641,14 +697,14 @@ $('tokenDlg').addEventListener('close', () => {
   store.set('ghindex:token', v, !$('remember').checked);
   store.del('ghindex:cache'); // a different token may belong to a different account
   S.token = v;
-  Object.assign(S, { login: null, profile: null, repos: [], stars: [], following: [], lists: [], loadedAt: null });
+  Object.assign(S, { login: null, profile: null, repos: [], stars: [], following: [], lists: [], suggestions: [], loadedAt: null });
   render(); refresh();
 });
 $('disconnectBtn').addEventListener('click', () => {
   store.del('ghindex:token');
   store.del('ghindex:cache');
   S.token = null; $('tokenDlg').close('cancel');
-  Object.assign(S, { login: null, profile: null, repos: [], stars: [], following: [], lists: [], loadedAt: null });
+  Object.assign(S, { login: null, profile: null, repos: [], stars: [], following: [], lists: [], suggestions: [], loadedAt: null });
   render();
 });
 $('gateBtn').addEventListener('click', openToken);

@@ -10,7 +10,7 @@ One page to browse your GitHub: your repositories, your stars (with star lists) 
 | --- | --- | --- |
 | Repositórios | Categories: Salesforce, Mobile & Cordova, Web & Node, Outros. Type: Originais, Privados, Públicos, Forks, Sem descrição | — |
 | Stars | Every star list, "Sem lista" (stars in no list), "De quem segues" (owner is followed), "Donos" (owners with 2+ starred repos) | Change a repo's lists, unstar |
-| Following | Pessoas, Organizações; each row links to your stars from that owner | Unfollow |
+| Following | Pessoas, Organizações; "Sugestões para seguir" (owners of 3+ of your stars you don't follow); each row links to your stars from that owner; sort "Mais stars tuas" | Unfollow, follow (suggestions) |
 
 Everywhere: instant search (`/` to focus, `Esc` to clear) over name, description, topics, language and list names; language and state filters; sorting; click a topic or list tag to filter by it. The URL keeps the view (`#stars/list:security?state=review&sort=rank`), so views can be bookmarked.
 
@@ -76,6 +76,7 @@ Edit `CONFIG` at the top of `app.js`:
 - `quietDays`, `stalledDays`, `abandonedDays`, `cleanupYears`: lifecycle thresholds
 - `deprecated`: regular expression matched against descriptions for "Descontinuado"
 - `ranking`: ranking weights
+- `suggestMin`: minimum starred repos for an unfollowed owner to be suggested
 - `ownerMin`: minimum starred repos for an owner to appear under "Donos" (any owner works by URL: `#stars/owner:<login>`)
 
 ## Run locally
