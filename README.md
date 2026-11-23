@@ -23,6 +23,8 @@ The page contains no data. Without a token it only shows a "connect a token" scr
 
 [Create token](https://github.com/settings/tokens/new?scopes=repo,user&description=GitHub%20Index). The token is stored only in your browser (`localStorage`, or `sessionStorage` if "Lembrar" is off) and sent only to `api.github.com`. Data is cached in the browser and refreshed after 10 minutes or with **Atualizar**.
 
+Hosting options and the plan to put the page behind a login (Cloudflare Pages + Access): [docs/HOSTING.md](docs/HOSTING.md).
+
 ## Customize
 
 Edit `CONFIG` at the top of `app.js`:
